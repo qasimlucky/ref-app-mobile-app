@@ -34,7 +34,7 @@
     "es2015/text.js"
   ],
   "scripts": {
-    "build": "rm -rf -- es2015; babel src -d .; NODE_ENV=es2015 babel src -d ./es2015; node script/inject-sequences.js",
+    "build": "node init && rm -rf -- es2015; babel src -d .; NODE_ENV=es2015 babel src -d ./es2015; node script/inject-sequences.js",
     "test": "mocha",
     "test:watch": "npm run test -- --watch"
   },
