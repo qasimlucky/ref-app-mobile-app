@@ -1,4 +1,5 @@
 import React, {useEffect, useRef, useState} from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   ActivityIndicator,
   Alert,
@@ -34,6 +35,35 @@ const GRADIENT_COLORS = [
 
 const {width: SCREEN_WIDTH} = Dimensions.get('window');
 const TOP_SCREEN_SPACING = 54;
+const API_BASE_URL =
+  Platform.OS === 'android'
+    ? 'http://10.0.2.2:8003/api'
+    : 'http://localhost:8003/api';
+const AUTH_STORAGE_KEY = 'ref-mobile-auth-token';
+
+async function apiRequest(path, method, body) {
+  let response;
+
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw new Error(`Unable to reach backend at ${API_BASE_URL}`);
+  }
+
+  const payload = await response.json().catch(() => null);
+
+  if (!response.ok || !payload?.success) {
+    throw new Error(payload?.message || 'Request failed');
+  }
+
+  return payload.data;
+}
 
 function SplashScreen() {
   return (
@@ -79,7 +109,7 @@ function AuthScreen({mode, onToggleMode, onAuthSuccess}) {
 
   const isRegister = mode === 'register';
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (isRegister && !fullName.trim()) {
       Alert.alert('Missing field', 'Please enter your full name.');
       return;
@@ -92,19 +122,42 @@ function AuthScreen({mode, onToggleMode, onAuthSuccess}) {
 
     setIsLoading(true);
 
-    setTimeout(() => {
-      setIsLoading(false);
+    try {
+      if (isRegister) {
+        await apiRequest('/auth/register', 'POST', {
+          fullName: fullName.trim(),
+          email: email.trim(),
+          password,
+        });
+
+        Alert.alert(
+          'Registration created',
+          'Your account was created. Please verify OTP before login. Static OTP: 1234',
+        );
+      } else {
+        const loginData = await apiRequest('/auth/login', 'POST', {
+          email: email.trim(),
+          password,
+        });
+
+        await AsyncStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(loginData));
+        onAuthSuccess(loginData);
+      }
+    } catch (error) {
       Alert.alert(
-        isRegister ? 'Register demo' : 'Login demo',
-        isRegister ? `Account created for ${email}` : `Signed in as ${email}`,
+        isRegister ? 'Registration failed' : 'Login failed',
+        error instanceof Error ? error.message : 'Something went wrong',
       );
-      onAuthSuccess();
-    }, 900);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleGoogleLogin = () => {
-    Alert.alert('Google login', 'Signed in with Google demo.');
-    onAuthSuccess();
+    Alert.alert(
+      'Google login',
+      'Google sign-in is not linked yet. Please use email and password.',
+    );
   };
 
   return (
@@ -782,9 +835,33 @@ function App() {
   const [showSplash, setShowSplash] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authMode, setAuthMode] = useState('login');
+  const [hydratingSession, setHydratingSession] = useState(true);
   const splashOpacity = useRef(new Animated.Value(1)).current;
   const loginOpacity = useRef(new Animated.Value(0)).current;
   const authSlider = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    let active = true;
+
+    async function restoreSession() {
+      try {
+        const rawValue = await AsyncStorage.getItem(AUTH_STORAGE_KEY);
+        if (rawValue && active) {
+          setIsAuthenticated(true);
+        }
+      } finally {
+        if (active) {
+          setHydratingSession(false);
+        }
+      }
+    }
+
+    restoreSession();
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -829,7 +906,12 @@ function App() {
 
       <Animated.View style={[styles.overlayScreen, {opacity: loginOpacity}]}>
         {isAuthenticated ? (
-          <MainApp onLogout={() => setIsAuthenticated(false)} />
+          <MainApp
+            onLogout={async () => {
+              await AsyncStorage.removeItem(AUTH_STORAGE_KEY);
+              setIsAuthenticated(false);
+            }}
+          />
         ) : (
           <Animated.View
             style={[
