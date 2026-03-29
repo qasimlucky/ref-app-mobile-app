@@ -689,7 +689,7 @@ function ProfileScreen() {
   );
 }
 
-function SettingsScreen() {
+function SettingsScreen({onLogout}) {
   const settingsRows = [
     'Account settings',
     'Privacy controls',
@@ -713,11 +713,15 @@ function SettingsScreen() {
           <Text style={styles.settingsRowArrow}>{'>'}</Text>
         </View>
       ))}
+
+      <Pressable onPress={onLogout} style={styles.settingsLogoutButton}>
+        <Text style={styles.settingsLogoutButtonText}>Logout</Text>
+      </Pressable>
     </ScrollView>
   );
 }
 
-function MainApp() {
+function MainApp({onLogout}) {
   const [activeTab, setActiveTab] = useState('post');
 
   const tabs = [
@@ -737,7 +741,7 @@ function MainApp() {
       case 'leaderboard':
         return <LeaderboardScreen />;
       case 'settings':
-        return <SettingsScreen />;
+        return <SettingsScreen onLogout={onLogout} />;
       case 'post':
       default:
         return <PostFeedScreen />;
@@ -825,7 +829,7 @@ function App() {
 
       <Animated.View style={[styles.overlayScreen, {opacity: loginOpacity}]}>
         {isAuthenticated ? (
-          <MainApp />
+          <MainApp onLogout={() => setIsAuthenticated(false)} />
         ) : (
           <Animated.View
             style={[
@@ -1571,6 +1575,19 @@ const styles = StyleSheet.create({
     color: '#746c66',
     fontSize: 18,
     fontWeight: '700',
+  },
+  settingsLogoutButton: {
+    marginTop: 10,
+    backgroundColor: '#17100f',
+    borderRadius: 18,
+    alignItems: 'center',
+    paddingVertical: 16,
+  },
+  settingsLogoutButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 0.3,
   },
   tabBar: {
     position: 'absolute',
