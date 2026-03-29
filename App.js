@@ -41,7 +41,7 @@ const API_BASE_URL =
     : 'http://localhost:8003/api';
 const AUTH_STORAGE_KEY = 'ref-mobile-auth-token';
 
-async function apiRequest(path, method, body) {
+async function apiRequest(path, method, body, token) {
   let response;
 
   try {
@@ -49,6 +49,7 @@ async function apiRequest(path, method, body) {
       method,
       headers: {
         'Content-Type': 'application/json',
+        ...(token ? {Authorization: `Bearer ${token}`} : {}),
       },
       body: body ? JSON.stringify(body) : undefined,
     });
@@ -63,6 +64,21 @@ async function apiRequest(path, method, body) {
   }
 
   return payload.data;
+}
+
+async function getStoredAuthSession() {
+  const rawValue = await AsyncStorage.getItem(AUTH_STORAGE_KEY);
+
+  if (!rawValue) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    return parsed?.token ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function SplashScreen() {
@@ -742,6 +758,425 @@ function ProfileScreen() {
   );
 }
 
+function TournamentScreen() {
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [tournaments, setTournaments] = useState([]);
+  const [selectedTournamentId, setSelectedTournamentId] = useState('');
+  const [selectedTournament, setSelectedTournament] = useState(null);
+  const [joinForm, setJoinForm] = useState({
+    paymentProofUrl: '',
+    refundMethod: '',
+    refundAccount: '',
+  });
+
+  const loadTournaments = async () => {
+    const session = await getStoredAuthSession();
+
+    if (!session?.token) {
+      setLoading(false);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const data = await apiRequest('/tournaments', 'GET', undefined, session.token);
+      setTournaments(data);
+    } catch (error) {
+      Alert.alert(
+        'Tournament error',
+        error instanceof Error ? error.message : 'Unable to load tournaments.',
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadTournamentDetail = async tournamentId => {
+    const session = await getStoredAuthSession();
+
+    if (!session?.token || !tournamentId) {
+      return;
+    }
+
+    try {
+      const detail = await apiRequest(
+        `/tournaments/${tournamentId}`,
+        'GET',
+        undefined,
+        session.token,
+      );
+      setSelectedTournament(detail);
+      setJoinForm(current => ({
+        ...current,
+        refundMethod: detail?.myJoinRequest?.refundDetails?.method || '',
+        refundAccount: detail?.myJoinRequest?.refundDetails?.account || '',
+      }));
+    } catch (error) {
+      Alert.alert(
+        'Tournament error',
+        error instanceof Error ? error.message : 'Unable to load tournament.',
+      );
+    }
+  };
+
+  useEffect(() => {
+    loadTournaments();
+  }, []);
+
+  useEffect(() => {
+    if (selectedTournamentId) {
+      loadTournamentDetail(selectedTournamentId);
+    }
+  }, [selectedTournamentId]);
+
+  const submitJoinRequest = async () => {
+    const session = await getStoredAuthSession();
+
+    if (!session?.token || !selectedTournament) {
+      return;
+    }
+
+    try {
+      setBusy(true);
+      await apiRequest(
+        `/tournaments/${selectedTournament._id}/join`,
+        'POST',
+        {
+          paymentProofUrl: joinForm.paymentProofUrl,
+          refundDetails: {
+            method: joinForm.refundMethod || null,
+            account: joinForm.refundAccount,
+          },
+        },
+        session.token,
+      );
+      setJoinForm(current => ({...current, paymentProofUrl: ''}));
+      await loadTournaments();
+      await loadTournamentDetail(selectedTournament._id);
+      Alert.alert('Submitted', 'Your payment proof is waiting for approval.');
+    } catch (error) {
+      Alert.alert(
+        'Join failed',
+        error instanceof Error ? error.message : 'Unable to submit join request.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const updateRefundDetails = async () => {
+    const session = await getStoredAuthSession();
+
+    if (!session?.token || !selectedTournament) {
+      return;
+    }
+
+    try {
+      setBusy(true);
+      await apiRequest(
+        `/tournaments/${selectedTournament._id}/refund-details`,
+        'PATCH',
+        {
+          refundDetails: {
+            method: joinForm.refundMethod || null,
+            account: joinForm.refundAccount,
+          },
+        },
+        session.token,
+      );
+      await loadTournamentDetail(selectedTournament._id);
+      Alert.alert('Updated', 'Refund details updated successfully.');
+    } catch (error) {
+      Alert.alert(
+        'Update failed',
+        error instanceof Error ? error.message : 'Unable to update refund details.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const selectTeam = async teamId => {
+    const session = await getStoredAuthSession();
+
+    if (!session?.token || !selectedTournament) {
+      return;
+    }
+
+    try {
+      setBusy(true);
+      await apiRequest(
+        `/tournaments/${selectedTournament._id}/select-team`,
+        'POST',
+        {teamId},
+        session.token,
+      );
+      await loadTournaments();
+      await loadTournamentDetail(selectedTournament._id);
+      Alert.alert('Team selected', 'Your tournament team is now reserved.');
+    } catch (error) {
+      Alert.alert(
+        'Team selection failed',
+        error instanceof Error ? error.message : 'Unable to select team.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const joinRequest = selectedTournament?.myJoinRequest;
+
+  return (
+    <ScrollView
+      style={styles.tournamentScroll}
+      contentContainerStyle={styles.tournamentContent}
+      showsVerticalScrollIndicator={false}>
+      <LinearGradient
+        colors={GRADIENT_COLORS}
+        start={{x: 0, y: 1}}
+        end={{x: 1, y: 0}}
+        style={styles.tournamentHero}>
+        <Text style={styles.tournamentHeroEyebrow}>Tournament Module</Text>
+        <Text style={styles.tournamentHeroTitle}>PUBG Mobile</Text>
+        <Text style={styles.tournamentHeroSubtitle}>
+          This is an added module. The rest of the app stays the same while
+          tournament enrollment, approvals, refunds, and team selection run here.
+        </Text>
+      </LinearGradient>
+
+      <View style={styles.tournamentHeaderRow}>
+        {selectedTournament ? (
+          <>
+            <Pressable
+              onPress={() => {
+                setSelectedTournament(null);
+                setSelectedTournamentId('');
+              }}
+              style={styles.tournamentBackButton}>
+              <Text style={styles.tournamentBackButtonText}>Back</Text>
+            </Pressable>
+            <Pressable onPress={loadTournaments} style={styles.tournamentRefreshButton}>
+              <Text style={styles.tournamentRefreshButtonText}>Refresh</Text>
+            </Pressable>
+          </>
+        ) : (
+          <>
+            <Text style={styles.tournamentSectionTitle}>Available tournaments</Text>
+            <Pressable onPress={loadTournaments} style={styles.tournamentRefreshButton}>
+              <Text style={styles.tournamentRefreshButtonText}>Refresh</Text>
+            </Pressable>
+          </>
+        )}
+      </View>
+
+      {loading ? (
+        <ActivityIndicator color="#17100f" style={{marginTop: 24}} />
+      ) : !selectedTournament ? (
+        <View style={styles.tournamentStack}>
+          {tournaments.map(tournament => (
+            <Pressable
+              key={tournament._id}
+              onPress={async () => {
+                setSelectedTournamentId(tournament._id);
+                await loadTournamentDetail(tournament._id);
+              }}
+              style={styles.tournamentListCard}>
+              <View style={styles.tournamentListCardHeader}>
+                <View style={styles.tournamentListCardBadge}>
+                  <Text style={styles.tournamentListCardBadgeText}>🏆</Text>
+                </View>
+                <View style={styles.tournamentListCardInfo}>
+                  <Text style={styles.tournamentListCardTitle}>{tournament.title}</Text>
+                  <Text style={styles.tournamentListCardBody}>
+                    {tournament.description || 'Tap to see tournament details.'}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.tournamentListMetaRow}>
+                <Text style={styles.tournamentListMetaText}>
+                  {tournament.filledSlots}/{tournament.totalSlots} filled
+                </Text>
+                <Text
+                  style={[
+                    styles.tournamentListStatus,
+                    tournament.enrollmentStatus === 'closed' &&
+                      styles.tournamentListStatusClosed,
+                  ]}>
+                  {tournament.enrollmentStatus === 'open' ? 'Open' : 'Full'}
+                </Text>
+              </View>
+            </Pressable>
+          ))}
+        </View>
+      ) : (
+        <View style={styles.tournamentDetailCard}>
+          <Text style={styles.tournamentDetailTitle}>
+            {selectedTournament.title}
+          </Text>
+          <Text style={styles.tournamentDetailBody}>
+            {selectedTournament.description || 'No extra tournament details added yet.'}
+          </Text>
+          <Text style={styles.tournamentDetailMeta}>
+            Teams {selectedTournament.maxTeams} • Team Size {selectedTournament.teamSize}
+          </Text>
+          <Text style={styles.tournamentDetailMeta}>
+            Filled {selectedTournament.filledSlots}/{selectedTournament.totalSlots} •
+            Remaining {selectedTournament.remainingSlots}
+          </Text>
+
+          <View style={styles.tournamentInfoCard}>
+            <Text style={styles.tournamentInfoTitle}>Payment Details</Text>
+            <Text style={styles.tournamentInfoText}>
+              Bank Name: {selectedTournament.paymentDetails?.bankName || 'Not provided'}
+            </Text>
+            <Text style={styles.tournamentInfoText}>
+              Account Title:{' '}
+              {selectedTournament.paymentDetails?.accountTitle || 'Not provided'}
+            </Text>
+            <Text style={styles.tournamentInfoText}>
+              Account Number:{' '}
+              {selectedTournament.paymentDetails?.accountNumber || 'Not provided'}
+            </Text>
+          </View>
+
+          {joinRequest ? (
+            <View style={styles.tournamentInfoCard}>
+              <Text style={styles.tournamentInfoTitle}>
+                {joinRequest.status === 'pending'
+                  ? 'Waiting for Approval ⏳'
+                  : joinRequest.status === 'approved'
+                  ? joinRequest.teamId
+                    ? `Assigned to ${joinRequest.teamId.name} ✅`
+                    : 'Select Team ✅'
+                  : joinRequest.status === 'rejected_refund'
+                  ? 'Refund Initiated 💸'
+                  : 'Rejected ❌'}
+              </Text>
+              <Text style={styles.tournamentInfoText}>
+                Payment proof: {joinRequest.paymentProofUrl}
+              </Text>
+              {joinRequest.refundDetails?.method ? (
+                <Text style={styles.tournamentInfoText}>
+                  Refund: {joinRequest.refundDetails.method} /{' '}
+                  {joinRequest.refundDetails.account}
+                </Text>
+              ) : null}
+              {joinRequest.refundProofUrl ? (
+                <Text style={styles.tournamentInfoText}>
+                  Refund proof: {joinRequest.refundProofUrl}
+                </Text>
+              ) : null}
+            </View>
+          ) : selectedTournament.enrollmentStatus === 'open' ? (
+            <View style={styles.tournamentInfoCard}>
+              <Text style={styles.tournamentInfoTitle}>Join Tournament</Text>
+              <TextInput
+                value={joinForm.paymentProofUrl}
+                onChangeText={value =>
+                  setJoinForm(current => ({...current, paymentProofUrl: value}))
+                }
+                placeholder="Payment proof URL"
+                placeholderTextColor="#8a867f"
+                style={styles.input}
+              />
+              <TextInput
+                value={joinForm.refundMethod}
+                onChangeText={value =>
+                  setJoinForm(current => ({...current, refundMethod: value}))
+                }
+                placeholder="Refund method: JazzCash / EasyPaisa / Bank"
+                placeholderTextColor="#8a867f"
+                style={styles.input}
+              />
+              <TextInput
+                value={joinForm.refundAccount}
+                onChangeText={value =>
+                  setJoinForm(current => ({...current, refundAccount: value}))
+                }
+                placeholder="Refund account / wallet / IBAN"
+                placeholderTextColor="#8a867f"
+                style={styles.input}
+              />
+              <Pressable onPress={submitJoinRequest} style={styles.buttonWrap}>
+                <LinearGradient
+                  colors={GRADIENT_COLORS}
+                  start={{x: 0, y: 1}}
+                  end={{x: 1, y: 0}}
+                  style={styles.button}>
+                  {busy ? (
+                    <ActivityIndicator color="#ffffff" />
+                  ) : (
+                    <Text style={styles.buttonText}>Submit Payment Proof</Text>
+                  )}
+                </LinearGradient>
+              </Pressable>
+            </View>
+          ) : (
+            <View style={styles.tournamentInfoCard}>
+              <Text style={styles.tournamentInfoTitle}>Tournament Full ❌</Text>
+              <Text style={styles.tournamentInfoText}>
+                Enrollment is closed because all slots are already approved.
+              </Text>
+            </View>
+          )}
+
+          {joinRequest &&
+          (joinRequest.status === 'pending' ||
+            joinRequest.status === 'rejected' ||
+            joinRequest.status === 'rejected_refund') ? (
+            <View style={styles.tournamentInfoCard}>
+              <Text style={styles.tournamentInfoTitle}>Refund details</Text>
+              <TextInput
+                value={joinForm.refundMethod}
+                onChangeText={value =>
+                  setJoinForm(current => ({...current, refundMethod: value}))
+                }
+                placeholder="Refund method"
+                placeholderTextColor="#8a867f"
+                style={styles.input}
+              />
+              <TextInput
+                value={joinForm.refundAccount}
+                onChangeText={value =>
+                  setJoinForm(current => ({...current, refundAccount: value}))
+                }
+                placeholder="Refund account"
+                placeholderTextColor="#8a867f"
+                style={styles.input}
+              />
+              <Pressable onPress={updateRefundDetails} style={styles.tournamentRefundButton}>
+                <Text style={styles.tournamentRefundButtonText}>Update Refund Details</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          {selectedTournament.canSelectTeam ? (
+            <View style={styles.tournamentInfoCard}>
+              <Text style={styles.tournamentInfoTitle}>Select Team ✅</Text>
+              {selectedTournament.teams.map(team => (
+                <Pressable
+                  key={team._id}
+                  disabled={team.isFull || busy}
+                  onPress={() => selectTeam(team._id)}
+                  style={[
+                    styles.tournamentTeamButton,
+                    team.isFull && styles.tournamentTeamButtonDisabled,
+                  ]}>
+                  <Text style={styles.tournamentTeamButtonTitle}>{team.name}</Text>
+                  <Text style={styles.tournamentTeamButtonMeta}>
+                    {team.memberCount}/{selectedTournament.teamSize} players
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
+        </View>
+      )}
+    </ScrollView>
+  );
+}
+
 function SettingsScreen({onLogout}) {
   const settingsRows = [
     'Account settings',
@@ -782,6 +1217,7 @@ function MainApp({onLogout}) {
     {key: 'prediction', label: 'Prediction', icon: 'AI'},
     {key: 'leaderboard', label: 'Leaders', icon: 'LB'},
     {key: 'post', label: 'Post', icon: 'PO'},
+    {key: 'tournament', label: 'Tournament', icon: '🏆'},
     {key: 'settings', label: 'Settings', icon: 'ST'},
   ];
 
@@ -793,6 +1229,8 @@ function MainApp({onLogout}) {
         return <PredictionScreen />;
       case 'leaderboard':
         return <LeaderboardScreen />;
+      case 'tournament':
+        return <TournamentScreen />;
       case 'settings':
         return <SettingsScreen onLogout={onLogout} />;
       case 'post':
@@ -1613,6 +2051,256 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
+  },
+  tournamentScroll: {
+    flex: 1,
+  },
+  tournamentContent: {
+    flexGrow: 1,
+    paddingHorizontal: 20,
+    paddingTop: TOP_SCREEN_SPACING,
+    paddingBottom: 130,
+  },
+  tournamentHero: {
+    borderRadius: 28,
+    padding: 22,
+    marginBottom: 18,
+  },
+  tournamentHeroEyebrow: {
+    color: 'rgba(255,255,255,0.82)',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    marginBottom: 10,
+    textTransform: 'uppercase',
+  },
+  tournamentHeroTitle: {
+    color: '#ffffff',
+    fontSize: 30,
+    fontWeight: '800',
+    marginBottom: 8,
+  },
+  tournamentHeroSubtitle: {
+    color: 'rgba(255,255,255,0.86)',
+    fontSize: 14,
+    lineHeight: 21,
+  },
+  tournamentHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  tournamentBackButton: {
+    backgroundColor: '#f3ede7',
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  tournamentBackButtonText: {
+    color: '#17100f',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  tournamentSectionTitle: {
+    color: '#17100f',
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  tournamentRefreshButton: {
+    backgroundColor: '#f3ede7',
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  tournamentRefreshButtonText: {
+    color: '#17100f',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  tournamentList: {
+    marginBottom: 16,
+  },
+  tournamentStack: {
+    gap: 14,
+  },
+  tournamentListCard: {
+    backgroundColor: '#fffdfb',
+    borderColor: '#ece4dc',
+    borderWidth: 1,
+    borderRadius: 24,
+    padding: 18,
+  },
+  tournamentListCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  tournamentListCardBadge: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    backgroundColor: '#f3ede7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tournamentListCardBadgeText: {
+    fontSize: 20,
+  },
+  tournamentListCardInfo: {
+    flex: 1,
+  },
+  tournamentListCardTitle: {
+    color: '#17100f',
+    fontSize: 20,
+    fontWeight: '800',
+    marginBottom: 6,
+  },
+  tournamentListCardBody: {
+    color: '#635b56',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  tournamentListMetaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 14,
+  },
+  tournamentListMetaText: {
+    color: '#6d655f',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  tournamentListStatus: {
+    backgroundColor: '#eef6ef',
+    color: '#136b37',
+    fontSize: 12,
+    fontWeight: '800',
+    overflow: 'hidden',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  tournamentListStatusClosed: {
+    backgroundColor: '#f8d9d4',
+    color: '#9f2f20',
+  },
+  tournamentCard: {
+    width: 220,
+    backgroundColor: '#fffdfb',
+    borderColor: '#ece4dc',
+    borderWidth: 1,
+    borderRadius: 22,
+    padding: 16,
+    marginRight: 12,
+  },
+  tournamentCardActive: {
+    borderColor: '#7d6151',
+    backgroundColor: '#f8f1ea',
+  },
+  tournamentCardTitle: {
+    color: '#17100f',
+    fontSize: 17,
+    fontWeight: '800',
+    marginBottom: 6,
+  },
+  tournamentCardMeta: {
+    color: '#6d655f',
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 12,
+  },
+  tournamentCardStatus: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#f4eee7',
+    color: '#17100f',
+    fontSize: 12,
+    fontWeight: '800',
+    overflow: 'hidden',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+  },
+  tournamentCardStatusClosed: {
+    backgroundColor: '#f8d9d4',
+    color: '#9f2f20',
+  },
+  tournamentDetailCard: {
+    backgroundColor: '#fffdfb',
+    borderColor: '#ece4dc',
+    borderWidth: 1,
+    borderRadius: 24,
+    padding: 18,
+  },
+  tournamentDetailTitle: {
+    color: '#17100f',
+    fontSize: 22,
+    fontWeight: '800',
+    marginBottom: 8,
+  },
+  tournamentDetailBody: {
+    color: '#635b56',
+    fontSize: 14,
+    lineHeight: 21,
+    marginBottom: 10,
+  },
+  tournamentDetailMeta: {
+    color: '#6d655f',
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  tournamentInfoCard: {
+    marginTop: 16,
+    backgroundColor: '#f7f2ec',
+    borderRadius: 20,
+    padding: 16,
+  },
+  tournamentInfoTitle: {
+    color: '#17100f',
+    fontSize: 17,
+    fontWeight: '800',
+    marginBottom: 10,
+  },
+  tournamentInfoText: {
+    color: '#5f5853',
+    fontSize: 14,
+    lineHeight: 21,
+    marginTop: 4,
+  },
+  tournamentRefundButton: {
+    marginTop: 8,
+    backgroundColor: '#17100f',
+    borderRadius: 16,
+    alignItems: 'center',
+    paddingVertical: 14,
+  },
+  tournamentRefundButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  tournamentTeamButton: {
+    marginTop: 10,
+    backgroundColor: '#17100f',
+    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+  },
+  tournamentTeamButtonDisabled: {
+    backgroundColor: '#a59b93',
+  },
+  tournamentTeamButtonTitle: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  tournamentTeamButtonMeta: {
+    color: 'rgba(255,255,255,0.84)',
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 4,
   },
   settingsScroll: {
     flex: 1,
